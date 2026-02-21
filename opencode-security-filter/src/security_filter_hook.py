@@ -2,63 +2,15 @@
 """
 Claude Code PreToolUse hook for opencode-security-filter.
 
-Reads tool invocation JSON from stdin, extracts file paths,
-and checks each against SecurityFilter. Blocks the tool call
-if any path is denied.
+Thin protocol translator: reads Claude Code hook JSON from stdin,
+constructs an ACP JSON-RPC permission request, and delegates to
+SecurityProxy for all security decisions.
 """
 
 import json
-import shlex
 import sys
 
-from opencode_security.filter import SecurityFilter
-
-
-def extract_paths(tool_name: str, tool_input: dict) -> list[str]:
-    """Extract file paths from tool input based on tool type."""
-    paths: list[str] = []
-
-    if tool_name in ("Read", "Write", "Edit", "MultiEdit", "NotebookEdit"):
-        fp = tool_input.get("file_path", "")
-        if fp:
-            paths.append(fp)
-        for edit in tool_input.get("edits", []):
-            fp = edit.get("file_path", "")
-            if fp:
-                paths.append(fp)
-
-    elif tool_name in ("Glob", "Grep"):
-        p = tool_input.get("path", "")
-        if p:
-            paths.append(p)
-
-    elif tool_name == "Bash":
-        command = tool_input.get("command", "")
-        if command:
-            paths.extend(_paths_from_bash(command))
-
-    return paths
-
-
-def _paths_from_bash(command: str) -> list[str]:
-    """Best-effort path extraction from a bash command string.
-
-    Extracts tokens that look like file paths (contain / or ~).
-    The security filter decides what's actually blocked.
-    """
-    paths: list[str] = []
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        return paths
-
-    for token in tokens:
-        if token.startswith("-"):
-            continue
-        if "/" in token or token.startswith("~"):
-            paths.append(token)
-
-    return paths
+from opencode_security.proxy import SecurityProxy
 
 
 def main() -> None:
@@ -70,21 +22,51 @@ def main() -> None:
     tool_name = input_data.get("tool_name", "")
     tool_input = input_data.get("tool_input", {})
 
-    paths = extract_paths(tool_name, tool_input)
-    if not paths:
+    acp_msg = {
+        "jsonrpc": "2.0",
+        "id": "hook-1",
+        "method": "session/request_permission",
+        "params": {
+            "sessionId": "hook",
+            "toolCall": {
+                "toolCallId": "hook-tc",
+                "name": tool_name,
+                "input": tool_input,
+            },
+            "options": ["allow_once", "reject_once"],
+        },
+    }
+
+    proxy = SecurityProxy()
+    response_bytes, should_forward = proxy.process_agent_message(
+        json.dumps(acp_msg).encode()
+    )
+
+    if response_bytes is None and should_forward:
+        # Pass: let Claude Code prompt the user
         sys.exit(0)
 
-    security_filter = SecurityFilter()
+    if response_bytes is not None:
+        response = json.loads(response_bytes)
 
-    for path in paths:
-        result = security_filter.check(path)
-        if result.decision == "deny":
-            print(
-                f"SECURITY BLOCK: Access to {path} denied. {result.reason}",
-                file=sys.stderr,
-            )
+        if "error" in response:
+            data = response["error"]["data"]
+            lines = [
+                f"SECURITY BLOCK: Access to {data['path']} denied.",
+                f"Pattern: {data['pattern']} (level {data['level']})",
+                data["warning"],
+            ]
+            for d in data["directives"]["do_not"]:
+                lines.append(f"  - {d}")
+            for d in data["directives"]["must"]:
+                lines.append(f"  - {d}")
+            print("\n".join(lines), file=sys.stderr)
             sys.exit(2)
 
+        # result with allow_once -> permitted
+        sys.exit(0)
+
+    # Fallback: allow
     sys.exit(0)
 
 
