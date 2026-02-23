@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from opencode_security.patterns import PATTERNS, _build_recursive_dir_regex, expand_pattern, match_pattern
+from opencode_security.patterns import (
+    PATTERNS,
+    _build_recursive_dir_regex,
+    _build_substring_deny_regex,
+    expand_pattern,
+    match_pattern,
+)
 from opencode_security.types import SpecificityLevel
 
 
@@ -97,3 +103,51 @@ class TestRecursiveDirPattern:
         assert regex.search(f"{home}/.claude/projects/foo/bar")
         assert regex.search(f"{home}/.claude/projects")
         assert not regex.search(f"{home}/.claude/settings")
+
+
+class TestSubstringDenyPattern:
+    """Tests for _build_substring_deny_regex — substring match excluding source code files."""
+
+    def test_matches_data_file_with_substring(self):
+        regex = re.compile(_build_substring_deny_regex("credential"))
+        assert regex.search("/path/to/credentials.json")
+        assert regex.search("/path/to/credential.yaml")
+        assert regex.search("/path/to/credential.toml")
+
+    def test_excludes_source_code_files(self):
+        regex = re.compile(_build_substring_deny_regex("credential"))
+        assert not regex.search("/path/to/credentials.go")
+        assert not regex.search("/path/to/credentials.py")
+        assert not regex.search("/path/to/credentials.ts")
+        assert not regex.search("/path/to/credential_handler.rs")
+        assert not regex.search("/path/to/credentials.java")
+        assert not regex.search("/path/to/credentials.rb")
+        assert not regex.search("/path/to/credentials.nix")
+
+    def test_matches_directory_with_substring(self):
+        regex = re.compile(_build_substring_deny_regex("credential"))
+        assert regex.search("/path/credentials/config")
+        assert regex.search("/path/credential-store/data")
+
+    def test_matches_no_extension(self):
+        regex = re.compile(_build_substring_deny_regex("credential"))
+        assert regex.search("/path/aws_credentials")
+
+    def test_does_not_match_without_substring(self):
+        regex = re.compile(_build_substring_deny_regex("credential"))
+        assert not regex.search("/path/to/config.json")
+        assert not regex.search("/path/to/handler.go")
+
+    def test_password_pattern_excludes_source(self):
+        regex = re.compile(_build_substring_deny_regex("password"))
+        assert not regex.search("/path/to/password_utils.go")
+        assert not regex.search("/path/to/password.py")
+        assert regex.search("/path/to/password.txt")
+        assert regex.search("/path/to/passwords.yaml")
+
+    def test_deep_path_with_credential_source_file(self):
+        """Exact reproduction of the reported bug."""
+        regex = re.compile(_build_substring_deny_regex("credential"))
+        assert not regex.search(
+            "/home/user/dev/agent-data-leverage/jon-auth/internal/auth/credentials.go"
+        )

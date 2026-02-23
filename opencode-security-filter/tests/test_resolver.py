@@ -140,3 +140,88 @@ class TestTrustedDirResolution:
         )
         assert decision == "deny"
         assert level == SpecificityLevel.SECURITY_DIRECTORY
+
+
+class TestSourceCodeExclusion:
+    """Source code files with credential/password in the name should not be blocked."""
+
+    @pytest.mark.parametrize("ext", ["go", "py", "ts", "tsx", "js", "jsx", "rs", "java", "rb", "c", "cpp", "cs", "nix"])
+    def test_credentials_source_file_not_blocked(self, ext):
+        """credentials.{ext} should PASS (not blocked by credential pattern)"""
+        decision, reason, pattern, level = resolve(
+            f"/home/user/dev/auth/credentials.{ext}", False
+        )
+        assert decision == "pass", f"credentials.{ext} should pass, got {decision}: {reason}"
+
+    @pytest.mark.parametrize("ext", ["go", "py", "ts", "js", "rs", "java", "rb"])
+    def test_password_source_file_not_blocked(self, ext):
+        """password_utils.{ext} should PASS"""
+        decision, reason, pattern, level = resolve(
+            f"/home/user/dev/auth/password_utils.{ext}", False
+        )
+        assert decision == "pass", f"password_utils.{ext} should pass, got {decision}: {reason}"
+
+    @pytest.mark.parametrize("ext", ["go", "py", "ts"])
+    def test_credential_handler_not_blocked(self, ext):
+        """credential_handler.{ext} in a deep path should PASS"""
+        decision, reason, pattern, level = resolve(
+            f"/home/user/dev/agent-data-leverage/jon-auth/internal/auth/credential_handler.{ext}",
+            False,
+        )
+        assert decision == "pass"
+
+    def test_credential_json_still_blocked(self):
+        """credentials.json should still be DENIED"""
+        decision, reason, pattern, level = resolve(
+            "/home/user/project/credentials.json", False
+        )
+        assert decision == "deny"
+        assert level == SpecificityLevel.SECURITY_DIRECTORY
+
+    def test_credential_yaml_still_blocked(self):
+        """credentials.yaml should still be DENIED"""
+        decision, reason, pattern, level = resolve(
+            "/home/user/project/credentials.yaml", False
+        )
+        assert decision == "deny"
+        assert level == SpecificityLevel.SECURITY_DIRECTORY
+
+    def test_password_txt_still_blocked(self):
+        """password.txt should still be DENIED"""
+        decision, reason, pattern, level = resolve(
+            "/home/user/project/password.txt", False
+        )
+        assert decision == "deny"
+        assert level == SpecificityLevel.SECURITY_DIRECTORY
+
+    def test_credential_dir_still_blocked(self):
+        """credentials/ directory should still be DENIED"""
+        decision, reason, pattern, level = resolve(
+            "/home/user/project/credentials/config", False
+        )
+        assert decision == "deny"
+        assert level == SpecificityLevel.SECURITY_DIRECTORY
+
+    def test_aws_credentials_no_ext_still_blocked(self):
+        """aws_credentials (no extension) should still be DENIED"""
+        decision, reason, pattern, level = resolve(
+            "/home/user/.aws/aws_credentials", False
+        )
+        assert decision == "deny"
+
+    def test_credential_toml_still_blocked(self):
+        """credential.toml should still be DENIED"""
+        decision, reason, pattern, level = resolve(
+            "/home/user/project/credential.toml", False
+        )
+        assert decision == "deny"
+        assert level == SpecificityLevel.SECURITY_DIRECTORY
+
+    def test_secrets_dir_still_blocks_source_files(self):
+        """Source file INSIDE secrets/ dir should still be blocked by secrets pattern"""
+        decision, reason, pattern, level = resolve(
+            "/home/user/project/secrets/credentials.go", False
+        )
+        assert decision == "deny"
+        assert level == SpecificityLevel.SECURITY_DIRECTORY
+        assert "secrets" in pattern.pattern

@@ -10,6 +10,24 @@ from pathlib import Path
 
 from .types import SecurityPattern, SpecificityLevel, Operation
 
+# Source code file extensions excluded from credential/password substring matching.
+# Files ending in these extensions are clearly source code, not credential data.
+# Data file extensions (.json, .yaml, .toml, .xml, .ini, .conf, .txt, etc.)
+# are intentionally NOT listed here — they remain blocked.
+_SOURCE_CODE_EXTENSIONS: tuple[str, ...] = (
+    "go", "py", "ts", "tsx", "js", "jsx", "mjs", "cjs",
+    "rs", "java", "kt", "kts", "rb",
+    "c", "cc", "cpp", "cxx", "h", "hh", "hpp", "hxx",
+    "cs", "fs", "swift", "scala",
+    "lua", "sh", "bash", "zsh", "fish", "ps1",
+    "php", "pl", "pm", "r", "jl",
+    "hs", "erl", "ex", "exs", "clj", "cljs", "cljc",
+    "nix", "ml", "mli", "zig", "v", "d",
+    "dart", "elm", "nim", "cr", "purs",
+    "vue", "svelte",
+)
+_SOURCE_EXT_ALTERNATION = "|".join(_SOURCE_CODE_EXTENSIONS)
+
 
 def _home() -> str:
     """Get the home directory path with regex-safe escaping."""
@@ -100,6 +118,26 @@ def _build_recursive_dir_regex(dir_path: str) -> str:
     expanded = str(Path(dir_path).expanduser())
     escaped = re.escape(expanded)
     return f"^{escaped}(/|$)"
+
+
+def _build_substring_deny_regex(substring: str) -> str:
+    """Build regex matching substring anywhere in path, excluding source code files.
+
+    Matches any path containing the given substring, UNLESS the path ends
+    with a source code file extension (e.g., .go, .py, .ts). This prevents
+    false positives on source code files like credentials.go or password_utils.py
+    while still blocking data files like credentials.json or password.yaml.
+
+    Uses anchored lookaheads so re.search() only tries position 0.
+
+    Args:
+        substring: The substring to match (e.g., "credential", "password")
+
+    Returns:
+        Regex pattern string.
+    """
+    escaped = re.escape(substring)
+    return f"^(?=.*{escaped})(?!.*\\.({_SOURCE_EXT_ALTERNATION})$)"
 
 
 # Pattern configuration - all security patterns using compiled regex
@@ -229,16 +267,16 @@ PATTERNS: list[SecurityPattern] = [
         "Hidden secret (singular)",
     ),
 
-    # *credential* -> matches any path containing "credential" in filename
+    # *credential* -> matches any path containing "credential", excluding source code files
     SecurityPattern(
-        r"credential",
+        _build_substring_deny_regex("credential"),
         "deny",
         SpecificityLevel.SECURITY_DIRECTORY,
         "Credential files (singular/plural)",
     ),
-    # *password* -> matches any path containing "password" in filename
+    # *password* -> matches any path containing "password", excluding source code files
     SecurityPattern(
-        r"password",
+        _build_substring_deny_regex("password"),
         "deny",
         SpecificityLevel.SECURITY_DIRECTORY,
         "Password files",
