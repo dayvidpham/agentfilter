@@ -1,6 +1,7 @@
 {
   "database": "dolt",
-  "jsonl_export": "issues.jsonl",
   "backend": "dolt",
-  "dolt_database": "beads_af"
+  "dolt_server_port": 3307,
+  "dolt_database": "beads_af",
+  "dolt_mode": "server"
 }
